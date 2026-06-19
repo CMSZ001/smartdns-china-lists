@@ -1,0 +1,84 @@
+name: Update smartdns-china-lists
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  update-smartdns-china-lists:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Set variables
+      run: |
+        echo "RELEASE_NAME=Released on $(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Checkout repository
+      uses: actions/checkout@v6
+    
+    - name: Clone dnsmasq-china-list
+      run: |
+        git clone https://github.com/felixonmars/dnsmasq-china-list.git --depth 1
+        cd dnsmasq-china-list
+
+    - name: Install make and dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y make
+
+    - name: Run make command
+      working-directory: ./dnsmasq-china-list
+      run: |
+        make SERVER=CN smartdns
+
+    - name: Process Loyalsoldier rules
+      run: |
+        temp_file=$(mktemp)
+
+        curl -s "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt" >> "$temp_file"
+        curl -s "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt" >> "$temp_file"
+        curl -s "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/google-cn.txt" >> "$temp_file"
+        curl -s "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/china-list.txt" >> "$temp_file"
+
+        processed_temp=$(mktemp)
+        sed "s/^full://g;/^regexp:.*$/d;/^$/d" "$temp_file" > "$processed_temp"
+
+        sort -u "$processed_temp" | sed "s/^/nameserver \//g;s/$/\/CN/g" > Loyalsoldier.cn.smartdns.conf
+
+        rm "$temp_file" "$processed_temp"
+
+    - name: Prepare files for upload
+      run: |
+        mkdir -p publish
+        cp dnsmasq-china-list/accelerated-domains.china.smartdns.conf publish/ || true
+        cp dnsmasq-china-list/google.china.smartdns.conf publish/ || true
+        cp dnsmasq-china-list/apple.china.smartdns.conf publish/ || true
+        cp dnsmasq-china-list/bogus-nxdomain.china.smartdns.conf publish/ || true
+        cp Loyalsoldier.cn.smartdns.conf publish/ || true
+
+    - name: Git push assets to "release" branch
+      run: |
+        cd publish || exit 1
+        git init
+        git config --local user.name "github-actions[bot]"
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git checkout -b release
+        git add .
+        git commit -m "${{ env.RELEASE_NAME }}"
+        git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+        git push -f -u origin release
+
+    - name: 🗑️ 删除运行记录 / Delete workflow runs
+      uses: GitRML/delete-workflow-runs@main
+      continue-on-error: true
+      with:
+        retain_days: '1'
+        keep_minimum_runs: '0'
